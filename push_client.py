@@ -12,9 +12,9 @@ from tornado.ioloop import PeriodicCallback
 
 # 目前服务部署在我的云主机，暂时使用如下域名
 #HOST = 'hifocus.vendor.microembed.net'
-HOST = 'push.hifocus.cn'
+#HOST = 'push.hifocus.cn'
 # 本地测试使用
-#HOST = 'localhost'
+HOST = 'localhost'
 PORT = 18888
 # 客户端 UUID，以下两客户端均为两设备端的订阅者，就是说其中任意一台设备报警，两在线客户端都能收到推送
 CLI_UUID = ['8479e639-2163-4fb9-a0c4-0612028940c7', '105344c7-3176-4b6f-a6e8-9c8120fbe1ed']
