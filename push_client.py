@@ -113,7 +113,7 @@ class PushClient(object):
         message = {
                    'type': 'register',
                    'endpoint_type': self._endpoint_type,
-                   'uuid': self._uuid,
+                   'from': self._uuid,
                    }
         # NOTE: 在这里上传设备与用户间的从属关系
         if 'client' == self._endpoint_type:
@@ -136,7 +136,7 @@ class PushClient(object):
                            'type': 'message',
                            'sub_type': 'alert',# sub type 决定消息中所附带的其它信息
                            'endpoint_type': self._endpoint_type,
-                           'uuid': self._uuid,
+                           'from': self._uuid,
                            'desc': 'motion alarm...'
                            # TODO: MORE INFO. WRITE HERE
                            }
