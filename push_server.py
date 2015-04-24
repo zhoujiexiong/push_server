@@ -133,7 +133,7 @@ class PushClient(object):
                 devices = yield gen.Task(redis_client.hget, endpoint_key, 'devices')
                 if '' != devices:
                     devices = devices.split(':')
-                    yield gen.Task(self.unsubscribe_devices(devices))
+                    yield gen.Task(self.unsubscribe_devices, devices)
                 yield gen.Task(redis_client.delete, endpoint_key);
             else:
                 message = {}
@@ -228,31 +228,22 @@ class PushClient(object):
         except Exception, e:
             print 'send ack fail: ', e
            
-    # TODO: 此函数与获取在线设备分开 
     @gen.coroutine
     def subscribe_devices(self, devices):
-        endpoint_key = '%s:%s' % (self._endpoint_type, self._uuid)
         redis_client = PushServer.redis_client()
         pipe = redis_client.pipeline()
-        pipe.hset(endpoint_key, 'devices', ':'.join(devices))
-        online_devices = []
         for device in devices:
             device_key = 'device:%s' % device
-            # print 'device_key:', device_key
-            # 相当于等待其执行完成，但不让出 CPU
-            presence = yield gen.Task(redis_client.hget, device_key, "presence");
-            if '' != presence and 'online' == presence:
-                online_devices.append(device)
+            # NOTE: 相当于等待其执行完成，但不让出 CPU
             users = yield gen.Task(redis_client.hget, device_key, 'users')
             if '' == users:
                 pipe.hset(device_key, 'users', self._uuid)
             else:
                 if self._uuid not in users:
                     users += ':%s' % self._uuid
-                    print 'register users:', users
+                    #print 'register users:', users
                     pipe.hset(device_key, 'users', users)
         yield gen.Task(pipe.execute)
-        raise gen.Return(online_devices)
     
     @gen.coroutine
     def unsubscribe_devices(self, devices):
@@ -264,6 +255,17 @@ class PushClient(object):
                 users = users.split(':')
                 users.remove(self._uuid)
                 yield gen.Task(redis_client.hset, device_key, 'users', ':'.join(users))
+                
+    @gen.coroutine
+    def get_online_devices(self, devices):
+        redis_client = PushServer.redis_client()
+        online_devices = []
+        for device in devices:
+            device_key = 'device:%s' % device
+            presence = yield gen.Task(redis_client.hget, device_key, "presence");
+            if '' != presence and 'online' == presence:
+                online_devices.append(device)
+        raise gen.Return(online_devices)
 
     @gen.coroutine
     def handle_register(self, message):
@@ -292,15 +294,17 @@ class PushClient(object):
             endpoint_key = '%s:%s' % (self._endpoint_type, self._uuid)
             if 'client' == self._endpoint_type:
                 cur_devices = yield gen.Task(redis_client.hget, endpoint_key, 'devices')
-                #new_devices = message['devices']
+                new_devices = message['devices']
                 if '' != cur_devices:
                     # 不为 '' 意味着不是第一次 register
                     # 处理增删设备, new - cur(add), cur - new(del)
                     cur_devices = cur_devices.split(':')
-                    #new_devices = set(message['devices']) - set(cur_devices)
+                    new_devices = set(message['devices']) - set(cur_devices)
                     deleted_devices = list(set(cur_devices) - set(message['devices']))
                     yield gen.Task(self.unsubscribe_devices, deleted_devices)
-                online_devices = yield gen.Task(self.subscribe_devices, message['devices'])
+                yield gen.Task(self.subscribe_devices, new_devices)
+                yield gen.Task(redis_client.hset, endpoint_key, 'devices', ':'.join(message['devices']))
+                online_devices = yield gen.Task(self.get_online_devices, message['devices'])
                 print 'online devices:', online_devices
                 self.send_ack(message['type'], True, online_devices=online_devices)
             else:
