@@ -32,9 +32,9 @@ from tornado.gen import coroutine
 def add_callback(callback, *args, **kwargs):
     IOLoop.instance().add_callback(callback, *args, **kwargs)
 
-def add_timeout(deadline, callback, *args, **kwargs):
+def add_timeout(delay, callback, *args, **kwargs):
     # return IOLoop.instance().add_timeout(deadline, callback, *args, **kwargs)
-    return IOLoop.instance().call_later(deadline, callback, *args, **kwargs)
+    return IOLoop.instance().call_later(delay, callback, *args, **kwargs)
 
 def remove_timeout(timeout):
     IOLoop.instance().remove_timeout(timeout)
@@ -50,7 +50,7 @@ class PushSubscriber(BaseSubscriber):
     def on_message(self, msg):
         if not msg:
             return
-        print 'message.kind: %s, body: %s, channel: %s' % (msg.kind, msg.body, msg.channel)
+        #print 'message.kind: %s, body: %s, channel: %s' % (msg.kind, msg.body, msg.channel)
         try:
             if msg.kind == 'message' and msg.body:
                 if 'forward' == msg.channel:
@@ -103,6 +103,7 @@ class PushClient(object):
         self._is_registered = False
         self._endpoint_type = 'unknown'
         self._uuid = None
+        self._request_timeouts = {}
 
     def update_ttl(self):
         self._ttl = time.time() + CLIENT_TTL
@@ -149,18 +150,19 @@ class PushClient(object):
     @gen.coroutine
     def on_message(self, message):
         try:
-            # print 'on_message is invoked...,', message, type(message)
-            msg_type = type(message)        
-            if msg_type is types.StringType or msg_type is types.UnicodeType:
-                if msg_type is types.UnicodeType:
-                    message = message.encode('utf-8')
-                message = '%x\r\n%s\r\n' % (len(message), message)
-                # print 'push msg:', message
-                # NOTE: stream.write 函数不支持 unicode 数据
-                # NOTE: push message to endpoint here
-                yield self._stream.write(message)
+            #self._request_timeouts[request_id] 有可能在超时处理函数中就被删掉了
+            #所以这里有可能会发生异常[KeyError]，ack 也不会往客户端推了
+            msg = json.loads(message)
+            if 'ack' == msg['type']:
+                request_id = msg['request_id']
+                remove_timeout(self._request_timeouts[request_id])
+                del self._request_timeouts[request_id]
+            # NOTE: stream.write 函数不支持 UNICODE 数据
+            message = utf8(message)
+            message = '%x\r\n%s\r\n' % (len(message), message)
+            # push message to endpoint here
+            yield self._stream.write(message)
         except Exception, e:
-            # traceback.format_exc()
             print 'on message exception, ignored:', e
             # self.on_close()
             
@@ -214,11 +216,11 @@ class PushClient(object):
     
     # 由于发生在本连接内，不需要 REDIS 转发，所以 from/to 就不需要了
     @gen.coroutine
-    def send_ack(self, msg_type, result, reason=None, **kwargs):
+    def send_ack(self, sub_type, result, reason=None, **kwargs):
         try:
             ack = {}
             ack['type'] = 'ack'
-            ack['sub_type'] = msg_type
+            ack['sub_type'] = sub_type
             ack['result'] = result
             if reason is not None:
                 ack['reason'] = reason
@@ -334,8 +336,11 @@ class PushClient(object):
     # message is dict type
     @gen.coroutine
     def handle_message(self, message):
-        print 'handle message'
+        #print 'handle message'
         try:
+            # format check
+            message['from']
+            message['sub_type']
             # NOTE: 设备的消息都需要 notify, 而来自客户的消息 forward 即可
             message = json.dumps(message)
             if 'client' == self._endpoint_type:
@@ -343,7 +348,7 @@ class PushClient(object):
             else:
                 self.notify(message)
         except Exception, e:
-            print 'handle message exception:', e
+            self.send_ack("message", False, str(e))
         
     def handle_heartbeat(self, message):
         self.update_ttl()
@@ -353,23 +358,41 @@ class PushClient(object):
         else:
             # TODO: 心跳包中可带有更丰富的状态信息
             pass
-        
+    
+    @gen.coroutine
+    def handle_request_timeout(self, request_id, sub_type):
+        remove_timeout(self._request_timeouts[request_id])
+        del self._request_timeouts[request_id]
+        self.send_ack(sub_type, False, 'timeout', request_id=request_id)
+    
     # peer to peer
     def handle_request(self, message):
-        self.just_forward(message)
+        # NOTE: check if peer online or not[暂时不这么处理，为了减轻 redis 的负担]
+        sub_type = 'Unknown'
+        try:
+            sub_type = message['sub_type']
+            request_id = message['request_id']
+            message['from']
+            message['to'] 
+            self.forward(json.dumps(message))
+            timeout = add_timeout(3, self.handle_request_timeout, request_id, sub_type)
+            self._request_timeouts[request_id] = timeout
+        except Exception, e:
+            self.send_ack(sub_type, False, str(e))
     
     # peer to peer
     def handle_ack(self, message):
-        self.just_forward(message)
-    
-    def just_forward(self, message):
+        sub_type = 'Unknown'
         try:
-            print 'forward message'
-            message = json.dumps(message)
-            self.forward(message)
+            #print 'handle ack'
+            sub_type = message['sub_type']
+            message['request_id']
+            message['from']
+            message['to']
+            self.forward(json.dumps(message))
         except Exception, e:
-            print 'forward message exception:', e
-
+            self.send_ack(sub_type, False, str(e))
+    
 
 class PushServer(TCPServer):
     endpoints = {}  # id -> client object, after subscribe request
