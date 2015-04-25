@@ -6,12 +6,25 @@ import random
 import json
 import copy
 import traceback
+import logging
+
+#formatter = logging.Formatter('[%(asctime)s] %(levelname)s %(name)s: %(message)s')
+# formatter = logging.Formatter('[%(asctime)s] %(funcName)s: %(message)s')
+# handler = logging.StreamHandler()
+# handler.setFormatter(formatter)
+# logger = logging.getLogger('PUSH_SERVER')
+# logger.setLevel(logging.DEBUG)
+# logger.addHandler(handler)
+# 在 tornado 环境下使用以下两行即可，因为 tornado 对 root logger 做了配置
+logger = logging.getLogger()
+#logger.setLevel(logging.DEBUG)
 
 from tornado import gen
 from tornado.ioloop import IOLoop
 from tornado.ioloop import PeriodicCallback
 from tornado.tcpserver import TCPServer
 from tornado.escape import utf8
+from tornado.options import define, options 
 
 # https://github.com/leporo/tornado-redis
 import redis
@@ -27,6 +40,7 @@ import struct
 # from _dbus_bindings import Message
 import types
 from tornado.gen import coroutine
+import tornado
 
 
 def add_callback(callback, *args, **kwargs):
@@ -42,7 +56,6 @@ def remove_timeout(timeout):
 MAX_MSG_LEN = 4096
 # MAGIC_CODE = 0xfefefefe
 CLIENT_TTL = 30
-
 
 # NOTE: 用这个方式能够更好的在跨进程跨主机间传递数据
 class PushSubscriber(BaseSubscriber):
@@ -75,10 +88,12 @@ class PushSubscriber(BaseSubscriber):
                     subscribers = list(self.subscribers[msg.channel].keys())
                     if subscribers:
                         for subscriber in subscribers:
-                            print msg.body
+                            #print msg.body
+                            logger.debug(msg.body)
                             subscriber.on_message(msg.body)
         except Exception, e:
-            print 'Push subscriber on_message exception:', e
+            #print 'Push subscriber on_message exception:', e
+            logger.debug('subscriber on_message exception: ' + str(e))
         super(PushSubscriber, self).on_message(msg)
 
 
@@ -111,7 +126,7 @@ class PushClient(object):
     def check_ttl(self):
         # print 'check_ttl'
         if time.time() >= self._ttl:
-            print 'check_ttl fail, be about to close stream'
+            logger.debug('check_ttl fail, be about to close stream')
             self.close()
 
     def close(self):
@@ -119,7 +134,7 @@ class PushClient(object):
 
     @gen.coroutine
     def on_close(self):
-        print 'Push client is about to close'
+        logger.debug('Push client is about to close')
         self._periodic.stop()
         if not self._is_registered:
             return
@@ -145,7 +160,7 @@ class PushClient(object):
                 yield gen.Task(redis_client.hset, endpoint_key, "presence", "offline")
                 # delete the key indicate endpoint offline
         except Exception, e:
-            print 'on close exception:', e          
+            logger.debug('on close exception: ' + str(e))          
             
     @gen.coroutine
     def on_message(self, message):
@@ -163,7 +178,7 @@ class PushClient(object):
             # push message to endpoint here
             yield self._stream.write(message)
         except Exception, e:
-            print 'on message exception, ignored:', e
+            logger.debug('on message exception, ignored: ' + str(e))
             # self.on_close()
             
     @gen.coroutine
@@ -175,14 +190,14 @@ class PushClient(object):
                 # print 'Push client run: did read'
                 length = int(length, 16)
                 if MAX_MSG_LEN < length:
-                    print 'message length is too large'
+                    logger.debug('message length is too large')
                     break
                 message = yield self._stream.read_until('\r\n', max_bytes=MAX_MSG_LEN)
                 message = json.loads(message[0:-2])
                 self._callback[message['type']](message)
         except Exception, e:
         # except:
-            print 'read exception: ', e
+            logger.debug('read exception: ' + str(e))
             # print traceback.format_exc()
             self.close()
 
@@ -228,7 +243,7 @@ class PushClient(object):
             ack = self.pack(ack)
             yield self._stream.write(ack)
         except Exception, e:
-            print 'send ack fail: ', e
+            logger.debug('send ack fail: ' + str(e))
            
     @gen.coroutine
     def subscribe_devices(self, devices):
@@ -272,7 +287,7 @@ class PushClient(object):
     @gen.coroutine
     def handle_register(self, message):
         try:
-            print 'handle register'
+            logger.debug('handle register')
             if 'client' != message['endpoint_type'] and 'device' != message['endpoint_type']:
                 self.send_ack(message['type'], False, 'unknown endpoint type')
                 self.close()
@@ -307,7 +322,7 @@ class PushClient(object):
                 yield gen.Task(self.subscribe_devices, new_devices)
                 yield gen.Task(redis_client.hset, endpoint_key, 'devices', ':'.join(message['devices']))
                 online_devices = yield gen.Task(self.get_online_devices, message['devices'])
-                print 'online devices:', online_devices
+                logger.debug('online devices: ' + str(online_devices))
                 self.send_ack(message['type'], True, online_devices=online_devices)
             else:
                 # TODO: 在 redis 中存储 device 的状态，这个状态的更新可在心跳包中附上
@@ -319,7 +334,7 @@ class PushClient(object):
                 self.notify(json.dumps(msg))
                 self.send_ack(message['type'], True)
         except Exception, e:
-            print 'handle register exception:', e
+            logger.debug('handle register exception: ' + str(e))
             self.send_ack(message['type'], False, str(e))
             self.close()            
         
@@ -417,13 +432,12 @@ class PushServer(TCPServer):
         add_callback(client.run)
 
 
+define("port", default=18888, help="Run server on a specific port", type=int)
+  
 def main():
-    import sys
+    options.parse_command_line()
     server = PushServer()
-    if 2 <= len(sys.argv):
-        server.bind(int(sys.argv[1]))
-    else:
-        server.bind(18888)
+    server.bind(options.port)
     server.start(0)  # Forks multiple sub-processes
     # server.start(1)  # Forks multiple sub-processes
     IOLoop.instance().start()
