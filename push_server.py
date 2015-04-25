@@ -390,7 +390,7 @@ class PushClient(object):
             message['from']
             message['to'] 
             self.forward(json.dumps(message))
-            timeout = add_timeout(3, self.handle_request_timeout, request_id, sub_type)
+            timeout = add_timeout(10, self.handle_request_timeout, request_id, sub_type)
             self._request_timeouts[request_id] = timeout
         except Exception, e:
             self.send_ack(sub_type, False, str(e))
