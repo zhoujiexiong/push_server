@@ -157,7 +157,8 @@ class PushClient(object):
                 message['sub_type'] = 'device_offline'
                 message['from'] = self._uuid
                 self.notify(json.dumps(message))
-                yield gen.Task(redis_client.hset, endpoint_key, "presence", "offline")
+                yield gen.Task(redis_client.hset, endpoint_key, "presence", 'offline')
+                yield gen.Task(redis_client.hset, endpoint_key, "presence_ts", time.asctime())
                 # delete the key indicate endpoint offline
         except Exception, e:
             logger.debug('on close exception: ' + str(e))          
@@ -194,7 +195,13 @@ class PushClient(object):
                     break
                 message = yield self._stream.read_until('\r\n', max_bytes=MAX_MSG_LEN)
                 message = json.loads(message[0:-2])
-                self._callback[message['type']](message)
+                message_type = message['type']
+                # 连接上后第一条请求必须是 register
+                if not self._is_registered and 'register' != message_type:
+                    self.send_ack(message_type, False, "must register first")
+                    self.close()
+                    return
+                self._callback[message_type](message)
         except Exception, e:
         # except:
             logger.debug('read exception: ' + str(e))
@@ -243,7 +250,9 @@ class PushClient(object):
             ack = self.pack(ack)
             yield self._stream.write(ack)
         except Exception, e:
-            logger.debug('send ack fail: ' + str(e))
+            logger.debug('send ack fail, close stream: ' + str(e))
+            # 及时回收连接
+            self.close()
            
     @gen.coroutine
     def subscribe_devices(self, devices):
@@ -279,7 +288,7 @@ class PushClient(object):
         online_devices = []
         for device in devices:
             device_key = 'device:%s' % device
-            presence = yield gen.Task(redis_client.hget, device_key, "presence");
+            presence = yield gen.Task(redis_client.hget, device_key, 'presence');
             if '' != presence and 'online' == presence:
                 online_devices.append(device)
         raise gen.Return(online_devices)
@@ -295,9 +304,10 @@ class PushClient(object):
             self._endpoint_type = message['endpoint_type']
             # TODO: 以下判断只能保证进程内唯一
             if PushServer.endpoints.has_key(message['from']):
-                self.send_ack(message['type'], False, 'duplicate uuid')
-                self.close()
-                return
+                logger.warning("duplicate uuid")
+#                 self.send_ack(message['type'], False, 'duplicate uuid')
+#                 self.close()
+#                 return
             # 这里首先要订阅 redis 频道，否则在通知上线后订阅频道前对设备的请求无法响应
             self.subscribe()
             self._uuid = message['from']
@@ -326,7 +336,8 @@ class PushClient(object):
                 self.send_ack(message['type'], True, online_devices=online_devices)
             else:
                 # TODO: 在 redis 中存储 device 的状态，这个状态的更新可在心跳包中附上
-                yield gen.Task(redis_client.hset, endpoint_key, "presence", "online")
+                yield gen.Task(redis_client.hset, endpoint_key, 'presence', 'online')
+                yield gen.Task(redis_client.hset, endpoint_key, 'presence_ts', time.asctime())
                 msg = {}
                 msg['type'] = 'message'
                 msg['sub_type'] = 'device_online'
