@@ -91,7 +91,7 @@ class PushSubscriber(BaseSubscriber):
                             #print msg.body
                             logger.debug(msg.body)
                             subscriber.on_message(msg.body)
-        except Exception, e:
+        except Exception as e:
             #print 'Push subscriber on_message exception:', e
             logger.debug('subscriber on_message exception: ' + str(e))
         super(PushSubscriber, self).on_message(msg)
@@ -165,7 +165,7 @@ class PushClient(object):
                 yield gen.Task(redis_client.hset, endpoint_key, "presence", 'offline')
                 yield gen.Task(redis_client.hset, endpoint_key, "presence_ts", time.asctime())
                 # delete the key indicate endpoint offline
-        except Exception, e:
+        except Exception as e:
             logger.debug('on close exception: ' + str(e))          
             
     @gen.coroutine
@@ -183,7 +183,7 @@ class PushClient(object):
             message = '%x\r\n%s\r\n' % (len(message), message)
             # push message to endpoint here
             yield self._stream.write(message)
-        except Exception, e:
+        except Exception as e:
             logger.debug('on message exception, ignored: ' + str(e))
             # self.on_close()
             
@@ -204,10 +204,11 @@ class PushClient(object):
                 # 连接上后第一条请求必须是 register
                 if not self._is_registered and 'register' != message_type:
                     self.send_ack(message_type, False, "must register first")
-                    self.close()
+                    # NOTE: 正式发布时把下行打开
+                    #self.close()
                     return
                 self._callback[message_type](message)
-        except Exception, e:
+        except Exception as e:
         # except:
             logger.debug('read exception: ' + str(e))
             # print traceback.format_exc()
@@ -254,7 +255,7 @@ class PushClient(object):
             ack = dict(ack, **kwargs)#合并两 dict
             ack = self.pack(ack)
             yield self._stream.write(ack)
-        except Exception, e:
+        except Exception as e:
             logger.debug('send ack fail, close stream: ' + str(e))
             # 及时回收连接
             self.close()
@@ -306,21 +307,15 @@ class PushClient(object):
                 self.send_ack(message['type'], False, 'unknown endpoint type')
                 self.close()
                 return
-            self._endpoint_type = message['endpoint_type']
-            # TODO: 以下判断只能保证进程内唯一
-            if PushServer.endpoints.has_key(message['from']):
-                logger.warning("duplicate uuid, force the old one offline")
-                PushServer.endpoints[message['from']].close()
-#                 self.send_ack(message['type'], False, 'duplicate uuid')
-#                 self.close()
-#                 return
             # 这里首先要订阅 redis 频道，否则在通知上线后订阅频道前对设备的请求无法响应
-            self.subscribe()
-            self._uuid = message['from']
-            PushServer.endpoints[self._uuid] = self
-            self._is_registered = True
+            if not self._is_registered:
+                self._uuid = message['from']
+                self._endpoint_type = message['endpoint_type']
+                PushServer.endpoints[self._uuid] = self
+                self.subscribe()
+                self._is_registered = True
             
-            # UPDATE BI-DIRECTIONAL RELATIONSHIP          
+            # UPDATE BI-DIRECTIONAL RELATIONSHIP，支持多次注册，用于添加删除设备时          
             # if device, then notify the relative user currently online
             # if hifocus client, construct the ownership mapping here, otherwise retrieve ownership from DB
             redis_client = PushServer.redis_client()
@@ -350,7 +345,7 @@ class PushClient(object):
                 msg['from'] = self._uuid
                 self.notify(json.dumps(msg))
                 self.send_ack(message['type'], True)
-        except Exception, e:
+        except Exception as e:
             logger.debug('handle register exception: ' + str(e))
             self.send_ack(message['type'], False, str(e))
             self.close()            
@@ -379,7 +374,7 @@ class PushClient(object):
                 self.forward(message)                
             else:
                 self.notify(message)
-        except Exception, e:
+        except Exception as e:
             self.send_ack("message", False, str(e))
         
     def handle_heartbeat(self, message):
@@ -393,8 +388,11 @@ class PushClient(object):
     
     @gen.coroutine
     def handle_request_timeout(self, request_id, sub_type):
-        remove_timeout(self._request_timeouts[request_id])
-        del self._request_timeouts[request_id]
+        try:
+            remove_timeout(self._request_timeouts[request_id])
+            del self._request_timeouts[request_id]
+        except Exception as e:
+            logger.error('handler request timeout exception: ' + str(e))
         self.send_ack(sub_type, False, 'timeout', request_id=request_id)
     
     # peer to peer
@@ -409,7 +407,7 @@ class PushClient(object):
             self.forward(json.dumps(message))
             timeout = add_timeout(10, self.handle_request_timeout, request_id, sub_type)
             self._request_timeouts[request_id] = timeout
-        except Exception, e:
+        except Exception as e:
             self.send_ack(sub_type, False, str(e))
     
     # peer to peer
@@ -422,7 +420,7 @@ class PushClient(object):
             message['from']
             message['to']
             self.forward(json.dumps(message))
-        except Exception, e:
+        except Exception as e:
             self.send_ack(sub_type, False, str(e))
     
 
