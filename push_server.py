@@ -126,7 +126,7 @@ class PushClient(object):
     def check_ttl(self):
         # print 'check_ttl'
         if time.time() >= self._ttl:
-            logger.debug('check_ttl fail, be about to close stream:', self._uuid)
+            logger.debug('check_ttl fail, be about to close stream')
             self.close()
 
     def close(self):
