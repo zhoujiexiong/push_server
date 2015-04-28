@@ -142,10 +142,11 @@ class PushClient(object):
         self.subscribe(False)
         if self._uuid is not None and PushServer.endpoints.has_key(self._uuid):
             del PushServer.endpoints[self._uuid]
-        for request_id, timeout in self._request_timeouts.iteritems():
+        for timeout in self._request_timeouts.itervalues():
             remove_timeout(timeout)
-            del self._request_timeouts[request_id]
-        self._request_timeouts = {}
+            # ERROR: RuntimeError: dictionary changed size during iteration
+            #del self._request_timeouts[request_id]
+        self._request_timeouts.clear()
         redis_client = PushServer.redis_client()
         endpoint_key = '%s:%s' % (self._endpoint_type, self._uuid)
         try:
