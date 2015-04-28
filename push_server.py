@@ -126,7 +126,7 @@ class PushClient(object):
     def check_ttl(self):
         # print 'check_ttl'
         if time.time() >= self._ttl:
-            logger.debug('check_ttl fail, be about to close stream')
+            logger.debug('check_ttl fail, be about to close stream:', self._uuid)
             self.close()
 
     def close(self):
@@ -141,7 +141,11 @@ class PushClient(object):
         self._is_registered = False
         self.subscribe(False)
         if self._uuid is not None and PushServer.endpoints.has_key(self._uuid):
-            del(PushServer.endpoints[self._uuid]) 
+            del PushServer.endpoints[self._uuid]
+        for request_id, timeout in self._request_timeouts.iteritems():
+            remove_timeout(timeout)
+            del self._request_timeouts[request_id]
+        self._request_timeouts = {}
         redis_client = PushServer.redis_client()
         endpoint_key = '%s:%s' % (self._endpoint_type, self._uuid)
         try:
@@ -304,7 +308,8 @@ class PushClient(object):
             self._endpoint_type = message['endpoint_type']
             # TODO: 以下判断只能保证进程内唯一
             if PushServer.endpoints.has_key(message['from']):
-                logger.warning("duplicate uuid")
+                logger.warning("duplicate uuid, force the old one offline")
+                PushServer.endpoints[message['from']].close()
 #                 self.send_ack(message['type'], False, 'duplicate uuid')
 #                 self.close()
 #                 return
@@ -436,6 +441,7 @@ class PushServer(TCPServer):
     def redis_client(cls):
         if not cls._redis_client:
             cls._redis_client = tornadoredis.Client()
+            cls._redis_client.connect()
         return cls._redis_client
     
     def handle_stream(self, stream, address):
