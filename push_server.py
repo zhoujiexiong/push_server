@@ -57,6 +57,9 @@ MAX_MSG_LEN = 4096
 # MAGIC_CODE = 0xfefefefe
 CLIENT_TTL = 30
 
+CONNECTION_POOL = tornadoredis.ConnectionPool(max_connections=128,
+                                              wait_for_available=True)
+
 # NOTE: 用这个方式能够更好的在跨进程跨主机间传递数据
 class PushSubscriber(BaseSubscriber):
     @gen.coroutine
@@ -83,6 +86,7 @@ class PushSubscriber(BaseSubscriber):
                         for user_id in (s1 & s2):
                             # print 'push to uuid:', user_id
                             PushServer.endpoints[user_id].on_message(msg.body)
+                    yield gen.Task(redis_client.disconnect)
                 elif 'broadcast' == msg.channel:
                     # Get the list of subscribers for this channel
                     subscribers = list(self.subscribers[msg.channel].keys())
@@ -126,7 +130,10 @@ class PushClient(object):
     def check_ttl(self):
         # print 'check_ttl'
         if time.time() >= self._ttl:
-            logger.debug('check_ttl fail, be about to close stream')
+            if self._uuid is not None:
+                logger.debug('check_ttl fail, be about to close stream(%s)', self._uuid)
+            else:
+                logger.debug('check_ttl fail, be about to close stream(without register)')
             self.close()
 
     def close(self):
@@ -157,16 +164,10 @@ class PushClient(object):
                     yield gen.Task(self.unsubscribe_devices, devices)
                 yield gen.Task(redis_client.delete, endpoint_key);
             else:
-                message = {}
-                message['type'] = 'message'
-                message['sub_type'] = 'device_offline'
-                message['from'] = self._uuid
-                self.notify(json.dumps(message))
-                yield gen.Task(redis_client.hset, endpoint_key, "presence", 'offline')
-                yield gen.Task(redis_client.hset, endpoint_key, "presence_ts", time.asctime())
-                # delete the key indicate endpoint offline
+                yield gen.Task(self.update_device_presence, 'offline')
         except Exception as e:
-            logger.debug('on close exception: ' + str(e))          
+            logger.debug('on close exception: ' + str(e))
+        yield gen.Task(redis_client.disconnect)         
             
     @gen.coroutine
     def on_message(self, message):
@@ -207,6 +208,7 @@ class PushClient(object):
                     # NOTE: 正式发布时把下行打开
                     #self.close()
                     return
+                #yield gen.Task(self._callback[message_type], message)
                 self._callback[message_type](message)
         except Exception as e:
         # except:
@@ -223,18 +225,24 @@ class PushClient(object):
             # NOTE: unsubscribe 不支持元组或列表
             for channel in channels:
                 subscriber.unsubscribe(channel, self)
-                
+    
+    @gen.coroutine
     def publish(self, channel, message):
-        PushServer.redis_client().publish(channel, message)
+        redis_client = PushServer.redis_client()
+        redis_client.publish(channel, message)
+        yield gen.Task(redis_client.disconnect)
         
+    @gen.coroutine
     def notify(self, message):
-        self.publish('notify', message)
-        
+        yield gen.Task(self.publish, 'notify', message)
+    
+    @gen.coroutine
     def forward(self, message):
-        self.publish('forward', message)
-        
+        yield gen.Task(self.publish, 'forward', message)
+    
+    @gen.coroutine
     def broadcast(self, message):
-        self.publish('broadcast', message)
+        yield gen.Task(self.publish, 'broadcast', message)
 
     def pack(self, message):
         message = json.dumps(message)
@@ -276,6 +284,7 @@ class PushClient(object):
                     #print 'register users:', users
                     pipe.hset(device_key, 'users', users)
         yield gen.Task(pipe.execute)
+        yield gen.Task(redis_client.disconnect)
     
     @gen.coroutine
     def unsubscribe_devices(self, devices):
@@ -287,7 +296,8 @@ class PushClient(object):
                 users = users.split(':')
                 users.remove(self._uuid)
                 yield gen.Task(redis_client.hset, device_key, 'users', ':'.join(users))
-                
+        yield gen.Task(redis_client.disconnect)
+        
     @gen.coroutine
     def get_online_devices(self, devices):
         redis_client = PushServer.redis_client()
@@ -297,12 +307,12 @@ class PushClient(object):
             presence = yield gen.Task(redis_client.hget, device_key, 'presence');
             if '' != presence and 'online' == presence:
                 online_devices.append(device)
+        yield gen.Task(redis_client.disconnect)
         raise gen.Return(online_devices)
 
     @gen.coroutine
     def handle_register(self, message):
         try:
-            logger.debug('handle register')
             if 'client' != message['endpoint_type'] and 'device' != message['endpoint_type']:
                 self.send_ack(message['type'], False, 'unknown endpoint type')
                 self.close()
@@ -315,12 +325,14 @@ class PushClient(object):
                 self.subscribe()
                 self._is_registered = True
             
+            logger.debug('handle register(%s)' % self._uuid)
+            
             # UPDATE BI-DIRECTIONAL RELATIONSHIP，支持多次注册，用于添加删除设备时          
             # if device, then notify the relative user currently online
             # if hifocus client, construct the ownership mapping here, otherwise retrieve ownership from DB
-            redis_client = PushServer.redis_client()
-            endpoint_key = '%s:%s' % (self._endpoint_type, self._uuid)
             if 'client' == self._endpoint_type:
+                redis_client = PushServer.redis_client()
+                endpoint_key = '%s:%s' % (self._endpoint_type, self._uuid)
                 cur_devices = yield gen.Task(redis_client.hget, endpoint_key, 'devices')
                 new_devices = message['devices']
                 if '' != cur_devices:
@@ -332,21 +344,15 @@ class PushClient(object):
                     yield gen.Task(self.unsubscribe_devices, deleted_devices)
                 yield gen.Task(self.subscribe_devices, new_devices)
                 yield gen.Task(redis_client.hset, endpoint_key, 'devices', ':'.join(message['devices']))
+                yield gen.Task(redis_client.disconnect)
                 online_devices = yield gen.Task(self.get_online_devices, message['devices'])
                 logger.debug('online devices: ' + str(online_devices))
                 self.send_ack(message['type'], True, online_devices=online_devices)
             else:
-                # TODO: 在 redis 中存储 device 的状态，这个状态的更新可在心跳包中附上
-                yield gen.Task(redis_client.hset, endpoint_key, 'presence', 'online')
-                yield gen.Task(redis_client.hset, endpoint_key, 'presence_ts', time.asctime())
-                msg = {}
-                msg['type'] = 'message'
-                msg['sub_type'] = 'device_online'
-                msg['from'] = self._uuid
-                self.notify(json.dumps(msg))
+                yield gen.Task(self.update_device_presence, 'online')
                 self.send_ack(message['type'], True)
         except Exception as e:
-            logger.debug('handle register exception: ' + str(e))
+            logger.error('handle register exception: ' + str(e))
             self.send_ack(message['type'], False, str(e))
             self.close()            
         
@@ -371,12 +377,13 @@ class PushClient(object):
             # NOTE: 设备的消息都需要 notify, 而来自客户的消息 forward 即可
             message = json.dumps(message)
             if 'client' == self._endpoint_type:
-                self.forward(message)                
+                yield gen.Task(self.forward, message)                
             else:
-                self.notify(message)
+                yield gen.Task(self.notify, message)
         except Exception as e:
             self.send_ack("message", False, str(e))
-        
+    
+    @gen.coroutine
     def handle_heartbeat(self, message):
         self.update_ttl()
         self.send_ack('heartbeat', True)
@@ -384,9 +391,24 @@ class PushClient(object):
             pass
         else:
             # TODO: 心跳包中可带有更丰富的状态信息
-            pass
-    
+            # TODO: 服务端本地要做频度控制
+            yield gen.Task(self.update_device_presence, 'online')
+              
     @gen.coroutine
+    def update_device_presence(self, presence):
+        redis_client = PushServer.redis_client()
+        endpoint_key = '%s:%s' % (self._endpoint_type, self._uuid)
+        cur_presence = yield gen.Task(redis_client.hget, endpoint_key, 'presence')
+        if '' == cur_presence or presence != cur_presence:
+            yield gen.Task(redis_client.hset, endpoint_key, 'presence', presence)
+            yield gen.Task(redis_client.hset, endpoint_key, 'presence_ts', time.asctime())
+            msg = {}
+            msg['type'] = 'message'
+            msg['sub_type'] = 'device_%s' % presence
+            msg['from'] = self._uuid
+            yield gen.Task(self.notify, json.dumps(msg))
+        yield gen.Task(redis_client.disconnect)
+    
     def handle_request_timeout(self, request_id, sub_type):
         try:
             remove_timeout(self._request_timeouts[request_id])
@@ -396,6 +418,7 @@ class PushClient(object):
         self.send_ack(sub_type, False, 'timeout', request_id=request_id)
     
     # peer to peer
+    @gen.coroutine
     def handle_request(self, message):
         # NOTE: check if peer online or not[暂时不这么处理，为了减轻 redis 的负担]
         sub_type = 'Unknown'
@@ -404,13 +427,14 @@ class PushClient(object):
             request_id = message['request_id']
             message['from']
             message['to'] 
-            self.forward(json.dumps(message))
+            yield gen.Task(self.forward, json.dumps(message))
             timeout = add_timeout(10, self.handle_request_timeout, request_id, sub_type)
             self._request_timeouts[request_id] = timeout
         except Exception as e:
             self.send_ack(sub_type, False, str(e))
     
     # peer to peer
+    @gen.coroutine
     def handle_ack(self, message):
         sub_type = 'Unknown'
         try:
@@ -419,7 +443,7 @@ class PushClient(object):
             message['request_id']
             message['from']
             message['to']
-            self.forward(json.dumps(message))
+            yield gen.Task(self.forward, json.dumps(message))
         except Exception as e:
             self.send_ack(sub_type, False, str(e))
     
@@ -438,10 +462,11 @@ class PushServer(TCPServer):
     
     @classmethod
     def redis_client(cls):
-        if not cls._redis_client:
-            cls._redis_client = tornadoredis.Client()
-            cls._redis_client.connect()
-        return cls._redis_client
+#         if not cls._redis_client:
+#             cls._redis_client = tornadoredis.Client()
+#             cls._redis_client.connect()
+#         return cls._redis_client
+        return tornadoredis.Client(connection_pool=CONNECTION_POOL)
     
     def handle_stream(self, stream, address):
         client = PushClient(stream)
