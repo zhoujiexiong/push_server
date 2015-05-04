@@ -427,9 +427,9 @@ class PushClient(object):
             request_id = message['request_id']
             message['from']
             message['to'] 
-            yield gen.Task(self.forward, json.dumps(message))
             timeout = add_timeout(10, self.handle_request_timeout, request_id, sub_type)
             self._request_timeouts[request_id] = timeout
+            yield gen.Task(self.forward, json.dumps(message))
         except Exception as e:
             self.send_ack(sub_type, False, str(e))
     
