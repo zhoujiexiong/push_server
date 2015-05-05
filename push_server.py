@@ -142,7 +142,7 @@ class PushClient(object):
 
     @gen.coroutine
     def on_close(self):
-        logger.debug('Push client is about to close')
+        #logger.debug('Push client is about to close')
         self._periodic.stop()
         if not self._is_registered:
             return
@@ -213,7 +213,7 @@ class PushClient(object):
                 self._callback[message_type](message)
         except Exception as e:
         # except:
-            logger.debug('read exception: ' + str(e))
+            #logger.debug('read exception: ' + str(e))
             # print traceback.format_exc()
             self.close()
 
@@ -230,7 +230,7 @@ class PushClient(object):
     @gen.coroutine
     def publish(self, channel, message):
         redis_client = PushServer.redis_client()
-        redis_client.publish(channel, message)
+        yield gen.Task(redis_client.publish, channel, message)
         yield gen.Task(redis_client.disconnect)
         
     @gen.coroutine
@@ -435,7 +435,7 @@ class PushClient(object):
             sub_type = message['sub_type']
             request_id = message['request_id']
             message['from']
-            message['to'] 
+            message['to']
             timeout = add_timeout(10, self.handle_request_timeout, request_id, sub_type)
             self._request_timeouts[request_id] = timeout
             yield gen.Task(self.forward, json.dumps(message))
