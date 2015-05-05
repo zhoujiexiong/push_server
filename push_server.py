@@ -70,6 +70,9 @@ class PushSubscriber(BaseSubscriber):
         #print 'message.kind: %s, body: %s, channel: %s' % (msg.kind, msg.body, msg.channel)
         try:
             if msg.kind == 'message' and msg.body:
+                if 'test' == msg.channel:
+                    logger.info(str(PushServer.endpoints.keys()))
+                    
                 if 'forward' == msg.channel:
                     message = json.loads(msg.body)
                     if PushServer.endpoints.has_key(message['to']):
@@ -103,7 +106,8 @@ class PushSubscriber(BaseSubscriber):
 
 
 class PushClient(object):
-    def __init__(self, stream):
+    def __init__(self, stream, address):
+        self._address = address
         self._stream = stream
         self._stream.set_close_callback(self.on_close)
         # register handler callback
@@ -132,9 +136,9 @@ class PushClient(object):
         # print 'check_ttl'
         if time.time() >= self._ttl:
             if self._uuid is not None:
-                logger.debug('check_ttl fail, be about to close stream(%s)', self._uuid)
+                logger.debug('check_ttl fail, be about to close stream(%s, %s)' % (self._uuid, str(self._address)))
             else:
-                logger.debug('check_ttl fail, be about to close stream(without register)')
+                logger.debug('check_ttl fail, be about to close stream(without register: %s)' % str(self._address))
             self.close()
 
     def close(self):
@@ -218,7 +222,7 @@ class PushClient(object):
             self.close()
 
     def subscribe(self, is_subscribe=True):        
-        channels = ('forward', 'notify', 'broadcast')
+        channels = ('forward', 'notify', 'broadcast', 'test')
         subscriber = PushServer.subscriber()
         if is_subscribe:
             subscriber.subscribe(channels, self)
@@ -387,6 +391,9 @@ class PushClient(object):
     
     @gen.coroutine
     def handle_heartbeat(self, message):
+        if not PushServer.endpoints.has_key(self._uuid):
+            PushServer.endpoints[self._uuid] = self
+            logger.error('endpoint object was missing...');
         self.update_ttl()
         self.send_ack('heartbeat', True)
         if 'client' == self._endpoint_type:
@@ -480,7 +487,7 @@ class PushServer(TCPServer):
         return tornadoredis.Client(connection_pool=CONNECTION_POOL)
     
     def handle_stream(self, stream, address):
-        client = PushClient(stream)
+        client = PushClient(stream, address)
         add_callback(client.run)
 
 
