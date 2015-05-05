@@ -7,6 +7,7 @@ import json
 import copy
 import traceback
 import logging
+import os
 
 #formatter = logging.Formatter('[%(asctime)s] %(levelname)s %(name)s: %(message)s')
 # formatter = logging.Formatter('[%(asctime)s] %(funcName)s: %(message)s')
@@ -389,7 +390,12 @@ class PushClient(object):
         self.update_ttl()
         self.send_ack('heartbeat', True)
         if 'client' == self._endpoint_type:
-            pass
+            redis_client = PushServer.redis_client()
+            endpoint_key = '%s:%s' % (self._endpoint_type, self._uuid)
+            # DEBUG
+            yield gen.Task(redis_client.hset, endpoint_key, 'pid', os.getpid())
+            yield gen.Task(redis_client.hset, endpoint_key, 'presence_ts', time.asctime())
+            yield gen.Task(redis_client.disconnect)
         else:
             # TODO: 心跳包中可带有更丰富的状态信息
             # TODO: 服务端本地要做频度控制
@@ -400,9 +406,11 @@ class PushClient(object):
         redis_client = PushServer.redis_client()
         endpoint_key = '%s:%s' % (self._endpoint_type, self._uuid)
         cur_presence = yield gen.Task(redis_client.hget, endpoint_key, 'presence')
+        # DEBUG
+        yield gen.Task(redis_client.hset, endpoint_key, 'pid', os.getpid())
+        yield gen.Task(redis_client.hset, endpoint_key, 'presence_ts', time.asctime())
         if '' == cur_presence or presence != cur_presence:
             yield gen.Task(redis_client.hset, endpoint_key, 'presence', presence)
-            yield gen.Task(redis_client.hset, endpoint_key, 'presence_ts', time.asctime())
             msg = {}
             msg['type'] = 'message'
             msg['sub_type'] = 'device_%s' % presence
