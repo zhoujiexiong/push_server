@@ -381,6 +381,7 @@ class PushClient(object):
             else:
                 yield gen.Task(self.notify, message)
         except Exception as e:
+            logger.error('handle message exception: ' + str(e))
             self.send_ack("message", False, str(e))
     
     @gen.coroutine
@@ -431,6 +432,7 @@ class PushClient(object):
             self._request_timeouts[request_id] = timeout
             yield gen.Task(self.forward, json.dumps(message))
         except Exception as e:
+            logger.error('handle request exception: ' + str(e))
             self.send_ack(sub_type, False, str(e))
     
     # peer to peer
@@ -445,6 +447,7 @@ class PushClient(object):
             message['to']
             yield gen.Task(self.forward, json.dumps(message))
         except Exception as e:
+            logger.error('handle ack exception: ' + str(e))
             self.send_ack(sub_type, False, str(e))
     
 
