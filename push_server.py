@@ -75,7 +75,8 @@ class PushSubscriber(BaseSubscriber):
                     
                 if 'forward' == msg.channel:
                     message = json.loads(msg.body)
-                    if PushServer.endpoints.has_key(message['to']):
+                    #if PushServer.endpoints.has_key(message['to']):
+                    if message['to'] in PushServer.endpoints.keys():
                         PushServer.endpoints[message['to']].on_message(msg.body)
                 elif 'notify' == msg.channel:
                     # TODO: 根据设备与客户端的关系筛选出订阅者并对其发送 on_message 消息
@@ -152,9 +153,9 @@ class PushClient(object):
             return
         self._is_registered = False
         self.subscribe(False)
-        if self._uuid is not None and PushServer.endpoints.has_key(self._uuid):
+        #if self._uuid is not None and PushServer.endpoints.has_key(self._uuid):
+        if self._uuid in PushServer.endpoints.keys():
             del PushServer.endpoints[self._uuid]
-            logger.error('on_close: will delete endpoint: %s' % self._uuid)
         for timeout in self._request_timeouts.itervalues():
             remove_timeout(timeout)
             # ERROR: RuntimeError: dictionary changed size during iteration
@@ -173,8 +174,7 @@ class PushClient(object):
                 yield gen.Task(self.update_device_presence, 'offline')
         except Exception as e:
             logger.error('on close exception: ' + str(e))
-        yield gen.Task(redis_client.disconnect)
-        logger.debug('on_close end(%s)' % self._uuid)         
+        yield gen.Task(redis_client.disconnect)        
             
     @gen.coroutine
     def on_message(self, message):
@@ -215,8 +215,8 @@ class PushClient(object):
                     # NOTE: 正式发布时把下行打开
                     #self.close()
                     return
-                #yield gen.Task(self._callback[message_type], message)
-                self._callback[message_type](message)
+                yield gen.Task(self._callback[message_type], message)
+                #self._callback[message_type](message)
         except Exception as e:
         # except:
             #logger.debug('read exception: ' + str(e))
@@ -224,7 +224,7 @@ class PushClient(object):
             self.close()
 
     def subscribe(self, is_subscribe=True):        
-        channels = ('forward', 'notify', 'broadcast', 'test')
+        channels = ('forward', 'notify', 'broadcast', 'keep_alive', 'test')
         subscriber = PushServer.subscriber()
         if is_subscribe:
             subscriber.subscribe(channels, self)
@@ -324,6 +324,16 @@ class PushClient(object):
                 self.send_ack(message['type'], False, 'unknown endpoint type')
                 self.close()
                 return
+            # 把现有的连接挤下线不合理，返回重复的 uuid
+            # endpoint 网络发生切换时会出现这个情况：旧的连接已失效了，但服务端还没反应过来，而这时重连请求
+            # 过来了。目前采取的策略是，等待旧的连接超时，这会导致 endpoint 重连成功前会有几次失败
+            # 后面验证做好了可以改成将旧连接挤下线以提高体验
+            if message['from'] in PushServer.endpoints.keys():
+                self.send_ack(message['type'], False, 'duplicate uuid')
+                logger.error("duplicate uuid: %s" % message['from'])
+                self.close()
+                return
+            
             # 这里首先要订阅 redis 频道，否则在通知上线后订阅频道前对设备的请求无法响应
             if not self._is_registered:
                 self._uuid = message['from']
@@ -394,8 +404,9 @@ class PushClient(object):
     @gen.coroutine
     def handle_heartbeat(self, message):
         # NOTE: 规避在线但连不上的问题(endpoints 中的对象无端消失导致)
-        if not PushServer.endpoints.has_key(self._uuid):
-            PushServer.endpoints[self._uuid] = self
+        #if not PushServer.endpoints.has_key(self._uuid):
+        if self._uuid not in PushServer.endpoints.keys():
+            #PushServer.endpoints[self._uuid] = self
             logger.error('endpoint object(%s) was missing...' % self._uuid);
         self.update_ttl()
         self.send_ack('heartbeat', True)
@@ -491,7 +502,9 @@ class PushServer(TCPServer):
     
     def handle_stream(self, stream, address):
         client = PushClient(stream, address)
-        add_callback(client.run)
+        #add_callback(client.run)
+        #yield gen.Task(client.run)
+        client.run()
 
 
 define("port", default=18888, help="Run server on a specific port", type=int)
