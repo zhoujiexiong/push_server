@@ -12,14 +12,15 @@ from tornado.ioloop import PeriodicCallback
 
 # 目前服务部署在我的云主机，暂时使用如下域名
 #HOST = 'hifocus.vendor.microembed.net'
-#HOST = 'push.hifocus.cn'
+HOST = 'push.hifocus.cn'
 # 本地测试使用
-HOST = 'localhost'
+#HOST = 'localhost'
 PORT = 18888
 # 客户端 UUID，以下两客户端均为两设备端的订阅者，就是说其中任意一台设备报警，两在线客户端都能收到推送
 CLI_UUID = ['8479e639-2163-4fb9-a0c4-0612028940c7', '105344c7-3176-4b6f-a6e8-9c8120fbe1ed']
 # 与客户端关联的两台设备的 UUID
-DEV_UUID = ['29bf7931-3507-4892-bd73-67035dd87057', '3f99215f-fda0-4519-8b4a-b2e1af3ea43c']
+#DEV_UUID = ['29bf7931-3507-4892-bd73-67035dd87057', '3f99215f-fda0-4519-8b4a-b2e1af3ea43c']
+DEV_UUID = [u'00004CE1BB000088', u'00004CE1BB000036', u'00004CE1BB000400', u'00004CE1BB000414', u'00004CE1BB00002F', u'00004CE1BB000021', u'00004CE1BB000072', u'00004CE1BB000044', u'00004CE1BB000407']
 # 最大的消息长度限制为4K
 MAX_MSG_LEN = 4096
 
@@ -92,7 +93,7 @@ class PushClient(object):
                     break
                 message = yield self._stream.read_until('\r\n', max_bytes=MAX_MSG_LEN)
                 message = json.loads(message[0:-2])
-                if 'message' == message['type']:
+                if 'message' == message['type'] or 'request' == message['type']:
                     print 'MESSAGE RECEIVED:', message
         except Exception, e:
             print 'on message exception:', e

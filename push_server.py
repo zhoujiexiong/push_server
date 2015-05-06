@@ -154,6 +154,7 @@ class PushClient(object):
         self.subscribe(False)
         if self._uuid is not None and PushServer.endpoints.has_key(self._uuid):
             del PushServer.endpoints[self._uuid]
+            logger.error('on_close: will delete endpoint: %s' % self._uuid)
         for timeout in self._request_timeouts.itervalues():
             remove_timeout(timeout)
             # ERROR: RuntimeError: dictionary changed size during iteration
@@ -171,8 +172,9 @@ class PushClient(object):
             else:
                 yield gen.Task(self.update_device_presence, 'offline')
         except Exception as e:
-            logger.debug('on close exception: ' + str(e))
-        yield gen.Task(redis_client.disconnect)         
+            logger.error('on close exception: ' + str(e))
+        yield gen.Task(redis_client.disconnect)
+        logger.debug('on_close end(%s)' % self._uuid)         
             
     @gen.coroutine
     def on_message(self, message):
@@ -391,9 +393,10 @@ class PushClient(object):
     
     @gen.coroutine
     def handle_heartbeat(self, message):
+        # NOTE: 规避在线但连不上的问题(endpoints 中的对象无端消失导致)
         if not PushServer.endpoints.has_key(self._uuid):
             PushServer.endpoints[self._uuid] = self
-            logger.error('endpoint object was missing...');
+            logger.error('endpoint object(%s) was missing...' % self._uuid);
         self.update_ttl()
         self.send_ack('heartbeat', True)
         if 'client' == self._endpoint_type:
