@@ -219,7 +219,7 @@ class PushClient(object):
                 #self._callback[message_type](message)
         except Exception as e:
         # except:
-            #logger.debug('read exception: ' + str(e))
+            #logger.error('read exception: ' + str(e))
             # print traceback.format_exc()
             self.close()
 
@@ -324,18 +324,18 @@ class PushClient(object):
                 self.send_ack(message['type'], False, 'unknown endpoint type')
                 self.close()
                 return
-            # 把现有的连接挤下线不合理，返回重复的 uuid
-            # endpoint 网络发生切换时会出现这个情况：旧的连接已失效了，但服务端还没反应过来，而这时重连请求
-            # 过来了。目前采取的策略是，等待旧的连接超时，这会导致 endpoint 重连成功前会有几次失败
-            # 后面验证做好了可以改成将旧连接挤下线以提高体验
-            if message['from'] in PushServer.endpoints.keys():
-                self.send_ack(message['type'], False, 'duplicate uuid')
-                logger.error("duplicate uuid: %s" % message['from'])
-                self.close()
-                return
             
             # 这里首先要订阅 redis 频道，否则在通知上线后订阅频道前对设备的请求无法响应
             if not self._is_registered:
+                # 把现有的连接挤下线不合理，返回重复的 uuid
+                # endpoint 网络发生切换时会出现这个情况：旧的连接已失效了，但服务端还没反应过来，而这时重连请求
+                # 过来了。目前采取的策略是，等待旧的连接超时，这会导致 endpoint 重连成功前会有几次失败
+                # 后面验证做好了可以改成将旧连接挤下线以提高体验
+                if message['from'] in PushServer.endpoints.keys():
+                    self.send_ack(message['type'], False, 'duplicate uuid')
+                    logger.error("duplicate uuid: %s" % message['from'])
+                    self.close()
+                    return
                 self._uuid = message['from']
                 self._endpoint_type = message['endpoint_type']
                 PushServer.endpoints[self._uuid] = self
