@@ -46,7 +46,7 @@ pkg_install build-essential python-dev libhiredis-dev libssl-dev
 pkg_install nginx python-pip redis-server
 #pip_install --upgrade pip
 #pip_install --upgrade setuptools
-pip_install flup tornado DBUtils tornado-redis redis hiredis
+pip_install flup tornado DBUtils tornado-redis redis hiredis geoip2
 echo "Done."
 
 # NOTE: Manually
