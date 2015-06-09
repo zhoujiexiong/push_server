@@ -1,17 +1,41 @@
-#!/usr/bin/env python
-#-*-coding:utf-8-*-
+# -*-coding:utf-8-*-
 
-DB_HOST = 'localhost'
-DB_NAME = 'coocam'
-DB_USER = 'postgres'
-DB_PASS = '123456'
+REDIS_SERVER = 'push.seeucam.net'
 
-MAIN_HOST = 'comet.coocam.microembed.net'
-MAIN_PORT = '80'
-COMET_HOST = 'comet.coocam.microembed.net'
-COMET_PORT = '18612'
+MMDB_COUNTRY = 'data/GeoLite2-Country.mmdb'
 
-COMET_DEADLINE_CHECK_INTERVAL = 60
-COMET_DEADLINE_DELAY = COMET_DEADLINE_CHECK_INTERVAL
+DEFAULT_AREA = 'CN'
+DISPATCH_MAP = {
+                'CN': set(['CN']),
+                'US': set(['US', 'CA', 'DE', 'UK', 'FR'])
+                # default to HK
+                }
 
-PREVIEW_DIR = '/root/var/coocam/preview'
+PUSH_SERVERS_CN = [
+                   {'desc': 'push_0001_sz', 'ip': '120.25.220.159', 'port': '18888'},
+                   {'desc': 'push_0002_sz', 'ip': '120.25.220.159', 'port': '18888'},
+                   ]
+PUSH_SERVERS_US = [
+                   {'desc': 'push_0001_us', 'ip': '47.88.0.139', 'port': '18888'},
+                   {'desc': 'push_0002_us', 'ip': '47.88.0.139', 'port': '18888'},
+                   ]
+
+ICE_SERVERS_CN = [
+                   {'desc': 'ice_0001_sz', 'ip': '120.25.220.159', 'port': 'default'},
+                   {'desc': 'ice_0002_sz', 'ip': '120.25.220.159', 'port': 'default'},
+                   ]
+ICE_SERVERS_US = [
+                   {'desc': 'ice_0001_us', 'ip': '47.88.0.139', 'port': 'default'},
+                   {'desc': 'ice_0002_us', 'ip': '47.88.0.139', 'port': 'default'},
+                   ]
+
+CLUSTER = {
+           'push': {
+                    'CN': PUSH_SERVERS_CN,
+                    'US': PUSH_SERVERS_US,
+                    },
+           'ice': {
+                   'CN': ICE_SERVERS_CN,
+                   'US': ICE_SERVERS_US,
+                   },
+           }
